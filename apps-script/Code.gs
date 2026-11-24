@@ -8,7 +8,7 @@
  * Deploy:  Deploy > New deployment > Web app
  *          Execute as: Me        Who has access: Anyone
  * Script properties (Project Settings > Script properties):
- *   GOOGLE_CLIENT_ID  OAuth Web client ID (the same one used in config.js)   [required]
+ *   GOOGLE_CLIENT_ID  optional: only if you change the OAuth client (DEFAULT_CLIENT_ID below is already set)
  *   ADMIN_EMAILS      comma list of emails allowed to add games (default: you, the script owner)
  *   BGG_TOKEN         BoardGameGeek API application token (optional, boardgamegeek.com/applications)
  * Then run setup() once from the editor.
@@ -19,6 +19,8 @@
  */
 
 const SHEET_ID = '1bVzKKQcmN8jfEko9kLpyU68IGIFu5IYuD-vKCl3TtDc';
+// Public value (it is also in the website's config.js). The GOOGLE_CLIENT_ID script property overrides it.
+const DEFAULT_CLIENT_ID = '769471684180-3imp21jcvq210ap33fq14cdhs3uav20o.apps.googleusercontent.com';
 const CAT_TABS = { BOARDS: 'Boards', CARDS: 'Cards', DUELS: 'Duels' };
 const COL = { GAME: 1, MINP: 2, MAXP: 3, MINT: 4, MAXT: 5, AGE: 6, WEIGHT: 7, GENRE: 8, TAGS: 9,
   STATUS: 10, PRICE: 11, LINK: 12, BGG: 13, INTEREST: 14, SINCE: 15, ALSO: 16 };
@@ -91,8 +93,9 @@ function auth_(req) {
     encodeURIComponent(token), { muteHttpExceptions: true });
   if (r.getResponseCode() !== 200) throw new Error('Sign-in expired, please sign in again');
   const p = JSON.parse(r.getContentText());
-  const clientId = props_().getProperty('GOOGLE_CLIENT_ID');
-  if (!clientId || p.aud !== clientId) throw new Error('Sign-in not accepted (client ID mismatch)');
+  const allowed = [DEFAULT_CLIENT_ID].concat(String(props_().getProperty('GOOGLE_CLIENT_ID') || '').split(','))
+    .map(x => x.replace(/["'\s]/g, '')).filter(String);
+  if (allowed.indexOf(p.aud) < 0) throw new Error('Sign-in not accepted (client ID mismatch: ' + String(p.aud).slice(0, 12) + '…)');
   if (String(p.email_verified) !== 'true') throw new Error('Email not verified');
   const user = { email: String(p.email).toLowerCase(), name: p.name || p.email };
   user.isAdmin = adminEmails_().indexOf(user.email) >= 0;

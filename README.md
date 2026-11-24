@@ -34,7 +34,7 @@ The web app reads the sheet **as you**, so nobody else needs access. Open the sh
 1. Go to <https://script.google.com>, click **New project** and name it "Game Shelf API". It must be a **standalone** project, not Extensions → Apps Script inside the sheet, so it can't clash with your existing v4 script.
 2. Replace `Code.gs` with [`apps-script/Code.gs`](apps-script/Code.gs).
 3. Open **Project Settings → Script properties** and add:
-   - `GOOGLE_CLIENT_ID`: the client ID from step 2 (required)
+   - `GOOGLE_CLIENT_ID`: not needed, because the client ID is built into `Code.gs`
    - `ADMIN_EMAILS`: optional. It defaults to you, the script owner. Add others with commas.
    - `BGG_TOKEN`: optional but recommended. Register an app at <https://boardgamegeek.com/applications> to get one. Without it, BGG data comes only from BGFinder, which covers games sold in India.
 4. Choose `setup` in the function dropdown and click **Run**, then approve the permissions. This adds the ALSO IN column and the helper tabs, pulls BGFinder prices, fills BGG art and ratings, and schedules a nightly refresh at 4 am.
