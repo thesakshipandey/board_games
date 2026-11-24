@@ -29,6 +29,8 @@ const TAB_CACHE = 'BGG_CACHE';
 const TAB_BGF = 'BGFINDER_PRICES';
 const TAB_USERS = 'USER_DATA';
 const TAB_FAKE = 'COUNTERFEIT';
+const TAB_REG = 'USERS';
+const REG_HEAD = ['EMAIL', 'DISPLAY NAME', 'USERNAME', 'JOINED', 'LAST SEEN'];
 const BGF_URL = 'https://www.bgfindertool.com/';
 const CACHE_KEY = 'catalog_v1';
 
@@ -59,8 +61,9 @@ function route_(action, req) {
     switch (action) {
       case 'catalog': ensureSetup_(); out = getCatalog_(req.fresh === '1' || req.fresh === true); break;
       case 'summary': admin_(req); out = readSummary_(); break;
-      case 'me': out = getMine_(auth_(req)); break;
-      case 'saveMine': out = saveMine_(auth_(req), req.game, req.fields || {}); break;
+      case 'me': out = getMine_(auth_(req), true); break;
+      case 'register': out = register_(auth_(req), req.name, req.username); break;
+      case 'saveMine': out = saveMine_(requireReg_(auth_(req)), req.game, req.fields || {}); break;
       case 'bggSearch': admin_(req); out = bggSearch_(String(req.q || '')); break;
       case 'bggDetails': admin_(req); out = bggDetails_(String(req.id || '')); break;
       case 'addGame': out = addGame_(admin_(req), req.game || {}); break;
@@ -274,9 +277,56 @@ function counterfeit_() {
     .filter(r => r[0]).map(r => ({ name: r[0], url: r[1], search: r[2] }));
 }
 
+/* ------------------------------------------------------------------ registration (USERS tab) */
+
+function regRows_() {
+  const sh = tab_(TAB_REG, REG_HEAD);
+  const n = sh.getLastRow();
+  return { sh: sh, rows: n > 1 ? sh.getRange(2, 1, n - 1, REG_HEAD.length).getValues() : [] };
+}
+
+function profile_(user, touch) {
+  const r = regRows_();
+  const i = r.rows.findIndex(x => String(x[0]).toLowerCase() === user.email);
+  if (i >= 0) {
+    if (touch) r.sh.getRange(i + 2, 5).setValue(new Date());
+    return { name: r.rows[i][1], username: r.rows[i][2], joined: r.rows[i][3] instanceof Date ? r.rows[i][3].toISOString() : String(r.rows[i][3]) };
+  }
+  if (user.isAdmin) {   // the owner never has to sign up
+    const name = String(user.name || user.email.split('@')[0]);
+    const uname = user.email.split('@')[0].toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 20) || 'owner';
+    r.sh.appendRow([user.email, name, uname, new Date(), new Date()]);
+    return { name: name, username: uname };
+  }
+  return null;
+}
+
+function register_(user, name, username) {
+  name = String(name || '').trim().replace(/\s+/g, ' ');
+  username = String(username || '').trim().toLowerCase();
+  if (name.length < 2 || name.length > 40) throw new Error('Display name must be 2–40 characters');
+  if (!/^[a-z0-9_]{3,20}$/.test(username)) throw new Error('Username: 3–20 letters, numbers or _');
+  const lock = LockService.getScriptLock();
+  lock.waitLock(20000);
+  try {
+    const r = regRows_();
+    if (r.rows.some(x => String(x[0]).toLowerCase() === user.email)) throw new Error('You are already registered');
+    if (r.rows.some(x => String(x[2]).toLowerCase() === username)) throw new Error('That username is taken');
+    r.sh.appendRow([user.email, name, username, new Date(), new Date()]);
+  } finally { lock.releaseLock(); }
+  return getMine_(user, false);
+}
+
+function requireReg_(user) {
+  if (!user.isAdmin && !profile_(user, false)) throw new Error('Please finish signing up first');
+  return user;
+}
+
 /* ------------------------------------------------------------------ personal data */
 
-function getMine_(user) {
+function getMine_(user, touch) {
+  const prof = profile_(user, !!touch);
+  if (!prof) return { email: user.email, name: user.name, isAdmin: false, registered: false, items: {} };
   const items = {};
   if (user.isAdmin) {
     const ss = ss_();
@@ -311,7 +361,7 @@ function getMine_(user) {
       });
     }
   }
-  return { email: user.email, name: user.name, isAdmin: user.isAdmin, items: items };
+  return { email: user.email, name: prof.name || user.name, username: prof.username, isAdmin: user.isAdmin, registered: true, items: items };
 }
 
 const STATUSES = ['Wishlist', 'On the way', 'Owned', 'DIY', ''];
@@ -672,6 +722,7 @@ function setup() {
   tab_(TAB_CACHE, CACHE_HEAD);
   tab_(TAB_BGF, BGF_HEAD);
   tab_(TAB_USERS, USER_HEAD);
+  tab_(TAB_REG, REG_HEAD);
   const fake = tab_(TAB_FAKE, ['STORE', 'WEBSITE', 'SEARCH URL ({q} = game name)']);
   if (fake.getLastRow() < 2) {
     fake.getRange(2, 1, 3, 3).setValues([
