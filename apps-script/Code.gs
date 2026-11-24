@@ -55,7 +55,8 @@ function route_(action, req) {
   try {
     let out;
     switch (action) {
-      case 'catalog': out = getCatalog_(req.fresh === '1' || req.fresh === true); break;
+      case 'catalog': ensureSetup_(); out = getCatalog_(req.fresh === '1' || req.fresh === true); break;
+      case 'summary': admin_(req); out = readSummary_(); break;
       case 'me': out = getMine_(auth_(req)); break;
       case 'saveMine': out = saveMine_(auth_(req), req.game, req.fields || {}); break;
       case 'bggSearch': admin_(req); out = bggSearch_(String(req.q || '')); break;
@@ -587,6 +588,33 @@ function writeCache_(id, d) {
   else sh.appendRow(row);
 }
 
+/* ------------------------------------------------------------------ SUMMARY tab (owner only: it holds owned / spent data) */
+
+function readSummary_() {
+  const sh = ss_().getSheetByName('SUMMARY');
+  if (!sh) return { grid: [] };
+  const grid = sh.getDataRange().getDisplayValues();
+  while (grid.length && grid[grid.length - 1].every(c => !String(c).trim())) grid.pop();
+  return { grid: grid };
+}
+
+/* ------------------------------------------------------------------ first-run self setup */
+
+/** Runs setup() once, automatically, the first time the site asks for the catalogue. */
+function ensureSetup_() {
+  const p = props_();
+  if (p.getProperty('SETUP_V1')) return;
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(1000)) return;            // someone else is already setting up
+  try {
+    if (p.getProperty('SETUP_V1')) return;
+    setup();
+    p.setProperty('SETUP_V1', new Date().toISOString());
+  } catch (e) {
+    Logger.log('Auto setup failed: ' + e.message);
+  } finally { lock.releaseLock(); }
+}
+
 /* ------------------------------------------------------------------ scheduled jobs (run from editor / trigger) */
 
 /** Pulls the live Indian store listings from BGFinder into BGFINDER_PRICES. */
@@ -627,6 +655,7 @@ function fillBggCache() {
   need.forEach(id => {
     if (Date.now() - started > 300000) return;   // stay under the 6 min limit; run again for the rest
     try { writeCache_(id, bggDetails_(id, bgf)); } catch (e) { Logger.log(id + ': ' + e.message); }
+    if (props_().getProperty('BGG_TOKEN')) Utilities.sleep(1500);   // stay well inside BGG's rate limits
   });
   bustCache_();
   Logger.log('Cached ' + need.length + ' games');
@@ -650,5 +679,6 @@ function setup() {
   }
   ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'nightly').forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('nightly').timeBased().everyDays(1).atHour(4).create();
+  props_().setProperty('SETUP_V1', new Date().toISOString());
   nightly();
 }
