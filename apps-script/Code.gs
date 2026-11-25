@@ -32,6 +32,12 @@ const TAB_FAKE = 'COUNTERFEIT';
 const TAB_REG = 'USERS';
 const REG_HEAD = ['EMAIL', 'DISPLAY NAME', 'USERNAME', 'JOINED', 'LAST SEEN'];
 const BGF_URL = 'https://www.bgfindertool.com/';
+const TAB_EXTRAS = 'EXTRAS';
+const EXTRAS_HEAD = ['BASE GAME', 'TYPE', 'NAME', 'BGG LINK', 'PRICE ₹', 'STORE', 'BUY LINK', 'NOTE'];
+const EXTRAS_SEED_URL = 'https://thesakshipandey.github.io/boardgame/data/extras.json';
+const TAB_FAKE_PRICES = 'COUNTERFEIT_PRICES';
+const FAKE_HEAD = ['GAME', 'STORE', 'LISTING', 'PRICE ₹', 'IN STOCK', 'URL', 'UPDATED'];
+const RANKS_REPO = 'https://raw.githubusercontent.com/beefsack/bgg-ranking-historicals/master/';
 const CACHE_KEY = 'catalog_v1';
 
 const CACHE_HEAD = ['BGG ID', 'NAME', 'YEAR', 'IMAGE', 'THUMB', 'BGG RATING', 'BGG RANK', 'WEIGHT',
@@ -40,7 +46,8 @@ const BGF_HEAD = ['BGG ID', 'LISTING', 'STORE', 'PRICE', 'STATUS', 'URL', 'NAME'
   'MIN T', 'MAX T', 'AGE', 'YEAR', 'WEIGHT', 'RATING', 'RANK', 'IMAGE', 'THUMB', 'MECHANICS',
   'CATEGORIES', 'DESIGNERS', 'DESCRIPTION', 'UPDATED'];
 const USER_HEAD = ['EMAIL', 'GAME', 'STATUS', 'INTEREST', 'INTEREST SINCE', 'AUTHENTICITY',
-  'PRICE PAID', 'RATING /10', 'TIMES PLAYED', 'NOTES', 'UPDATED'];
+  'PRICE PAID', 'RATING /10', 'TIMES PLAYED', 'NOTES', 'UPDATED', 'EDITION'];
+const OWNED_EDITION_COL = 12;   // OWNED!L
 
 /* ------------------------------------------------------------------ HTTP */
 
@@ -219,6 +226,22 @@ function buildCatalog_() {
     });
     bgfUpdated = bs.getRange(2, BGF_HEAD.length).getDisplayValue();
   }
+  const extras = {};
+  const es = ss.getSheetByName(TAB_EXTRAS);
+  if (es && es.getLastRow() > 1) {
+    es.getRange(2, 1, es.getLastRow() - 1, EXTRAS_HEAD.length).getDisplayValues().forEach(r => {
+      if (!r[0] || !r[2]) return;
+      (extras[norm_(r[0])] = extras[norm_(r[0])] || []).push({ type: r[1], name: r[2], bgg: r[3], price: num_(r[4]), store: r[5], buy: r[6], note: r[7] });
+    });
+  }
+  const fakes = {};
+  const fs = ss.getSheetByName(TAB_FAKE_PRICES);
+  if (fs && fs.getLastRow() > 1) {
+    fs.getRange(2, 1, fs.getLastRow() - 1, 6).getValues().forEach(r => {
+      if (!r[0]) return;
+      (fakes[norm_(r[0])] = fakes[norm_(r[0])] || []).push({ store: r[1], listing: r[2], price: num_(r[3]), inStock: r[4] === true || r[4] === 'TRUE', url: r[5] });
+    });
+  }
   const games = [];
   for (const t in CAT_TABS) {
     const sh = ss.getSheetByName(t);
@@ -239,8 +262,10 @@ function buildCatalog_() {
         bggRating: c ? num_(c[5]) : null, bggRank: c ? num_(c[6]) : null,
         mechanics: c && c[8] ? c[8].split('|') : [], bggCategories: c && c[9] ? c[9].split('|') : [],
         designers: c && c[10] ? c[10].split('|') : [], bestPlayers: c ? c[11] : '',
-        description: c ? String(c[12]).slice(0, 700) : '',
-        offers: (offers[id] || []).sort((a, b) => (a.price || 1e9) - (b.price || 1e9))
+        description: c ? String(c[12]).slice(0, 450) : '',
+        offers: (offers[id] || []).sort((a, b) => (a.price || 1e9) - (b.price || 1e9)),
+        extras: extras[norm_(r[0])] || [],
+        fakes: (fakes[norm_(r[0])] || []).sort((a, b) => (b.inStock - a.inStock) || ((a.price || 1e9) - (b.price || 1e9)))
       });
     });
   }
@@ -344,11 +369,13 @@ function getMine_(user, touch) {
     }
     const os = ss.getSheetByName(OWNED_TAB);
     if (os && os.getLastRow() > 1) {
-      os.getRange(2, 1, os.getLastRow() - 1, 6).getDisplayValues().forEach(r => {
+      const w = Math.max(6, Math.min(os.getMaxColumns(), OWNED_EDITION_COL));
+      os.getRange(2, 1, os.getLastRow() - 1, w).getDisplayValues().forEach(r => {
         const name = String(r[0]).trim();
         if (!name) return;
         const it = items[name] = items[name] || {};
         it.authenticity = r[2]; it.pricePaid = num_(r[3]); it.rating = num_(r[4]); it.plays = num_(r[5]);
+        it.edition = r[OWNED_EDITION_COL - 1] || '';
       });
     }
   } else {
@@ -357,7 +384,7 @@ function getMine_(user, touch) {
       sh.getRange(2, 1, sh.getLastRow() - 1, USER_HEAD.length).getValues().forEach(r => {
         if (String(r[0]).toLowerCase() !== user.email) return;
         items[r[1]] = { status: r[2], interest: r[3], since: r[4] instanceof Date ? r[4].toISOString() : String(r[4] || ''), authenticity: r[5], pricePaid: num_(r[6]),
-          rating: num_(r[7]), plays: num_(r[8]), notes: r[9] };
+          rating: num_(r[7]), plays: num_(r[8]), notes: r[9], edition: r[11] || '' };
       });
     }
   }
@@ -381,6 +408,7 @@ function clean_(f) {
     }
   });
   if ('notes' in f) o.notes = String(f.notes || '').slice(0, 500);
+  if ('edition' in f) o.edition = String(f.edition || '').slice(0, 80);
   return o;
 }
 
@@ -407,7 +435,7 @@ function saveAdmin_(g, name, f) {
   }
   const status = 'status' in f ? f.status : g.r[COL.STATUS - 1];
   const ownedish = ['Owned', 'On the way', 'DIY'].indexOf(status) >= 0;
-  const personal = ['authenticity', 'pricePaid', 'rating', 'plays'].some(k => k in f);
+  const personal = ['authenticity', 'pricePaid', 'rating', 'plays', 'edition'].some(k => k in f);
   if (!ownedish && !personal) return;
   const os = ss_().getSheetByName(OWNED_TAB);
   if (!os) return;
@@ -422,6 +450,13 @@ function saveAdmin_(g, name, f) {
   if ('pricePaid' in f) os.getRange(row, 4).setValue(f.pricePaid);
   if ('rating' in f) os.getRange(row, 5).setValue(f.rating);
   if ('plays' in f) os.getRange(row, 6).setValue(f.plays);
+  if ('edition' in f) { ensureOwnedEdition_(os); os.getRange(row, OWNED_EDITION_COL).setValue(f.edition); }
+}
+
+function ensureOwnedEdition_(os) {
+  if (os.getMaxColumns() < OWNED_EDITION_COL) os.insertColumnsAfter(os.getMaxColumns(), OWNED_EDITION_COL - os.getMaxColumns());
+  const h = os.getRange(1, OWNED_EDITION_COL);
+  if (!h.getDisplayValue()) h.setValue('EDITION').setFontWeight('bold');
 }
 
 function saveUser_(user, name, f) {
@@ -429,8 +464,9 @@ function saveUser_(user, name, f) {
   const n = sh.getLastRow();
   const v = n > 1 ? sh.getRange(2, 1, n - 1, USER_HEAD.length).getValues() : [];
   let i = v.findIndex(r => String(r[0]).toLowerCase() === user.email && norm_(r[1]) === norm_(name));
-  const row = i >= 0 ? v[i] : [user.email, name, '', '', '', '', '', '', '', '', ''];
-  const map = { status: 2, interest: 3, authenticity: 5, pricePaid: 6, rating: 7, plays: 8, notes: 9 };
+  const row = i >= 0 ? v[i] : [user.email, name, '', '', '', '', '', '', '', '', '', ''];
+  while (row.length < USER_HEAD.length) row.push('');
+  const map = { status: 2, interest: 3, authenticity: 5, pricePaid: 6, rating: 7, plays: 8, notes: 9, edition: 11 };
   for (const k in f) row[map[k]] = f[k];
   if ('interest' in f) row[4] = f.interest ? new Date() : '';
   row[10] = new Date();
@@ -629,6 +665,30 @@ function ensureAlsoCol_(sh) {
   }
 }
 
+function cacheRow_(id, d) {
+  return [id, d.name || '', d.year || '', d.image || '', d.thumb || '', d.rating || '', d.rank || '', d.weight || '',
+    (d.mechanics || []).join('|'), (d.categories || []).join('|'), (d.designers || []).join('|'), d.bestPlayers || '',
+    String(d.description || '').slice(0, 1500), new Date()];
+}
+
+/** Upserts many BGG_CACHE rows with one read and one write. Keeps existing rank/rating when the new data has none. */
+function writeCacheBulk_(pairs) {
+  if (!pairs.length) return;
+  const sh = tab_(TAB_CACHE, CACHE_HEAD);
+  const n = sh.getLastRow();
+  const data = n > 1 ? sh.getRange(2, 1, n - 1, CACHE_HEAD.length).getValues() : [];
+  const at = {};
+  data.forEach((r, i) => at[String(r[0])] = i);
+  pairs.forEach(([id, d]) => {
+    const row = cacheRow_(id, d);
+    if (id in at) {
+      const old = data[at[id]];
+      data[at[id]] = row.map((v, k) => (v === '' || v == null) ? old[k] : v);
+    } else { at[id] = data.length; data.push(row); }
+  });
+  sh.getRange(2, 1, data.length, CACHE_HEAD.length).setValues(data);
+}
+
 function writeCache_(id, d) {
   const sh = tab_(TAB_CACHE, CACHE_HEAD);
   const row = [id, d.name || '', d.year || '', d.image || '', d.thumb || '', d.rating || '', d.rank || '', d.weight || '',
@@ -656,13 +716,12 @@ function readSummary_() {
 /** Runs setup() once, automatically, the first time the site asks for the catalogue. */
 function ensureSetup_() {
   const p = props_();
-  if (p.getProperty('SETUP_V1')) return;
+  if (p.getProperty('SETUP_V2')) return;
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(1000)) return;            // someone else is already setting up
   try {
-    if (p.getProperty('SETUP_V1')) return;
-    setup();
-    p.setProperty('SETUP_V1', new Date().toISOString());
+    if (!p.getProperty('SETUP_V1')) { setup(); p.setProperty('SETUP_V1', new Date().toISOString()); }
+    if (!p.getProperty('SETUP_V2')) { setupV2_(); p.setProperty('SETUP_V2', new Date().toISOString()); bustCache_(); }
   } catch (e) {
     Logger.log('Auto setup failed: ' + e.message);
   } finally { lock.releaseLock(); }
@@ -697,24 +756,165 @@ function fillBggCache() {
   const ss = ss_();
   const cs = tab_(TAB_CACHE, CACHE_HEAD);
   const have = {};
-  if (cs.getLastRow() > 1) cs.getRange(2, 1, cs.getLastRow() - 1, 1).getDisplayValues().forEach(r => have[r[0]] = 1);
+  const token = !!props_().getProperty('BGG_TOKEN');
+  const bgf = bgfRows_();
+  const onBgf = {};
+  bgf.forEach(r => onBgf[String(r[0])] = 1);
+  // Skip games that already have art, and (without a token) games no source can give art for yet.
+  if (cs.getLastRow() > 1) cs.getRange(2, 1, cs.getLastRow() - 1, 5).getDisplayValues().forEach(r => { if (r[3] || (!token && !onBgf[r[0]])) have[r[0]] = 1; });
   const need = [];
   for (const t in CAT_TABS) {
     const sh = ss.getSheetByName(t);
     if (sh) rowsOf_(sh).forEach(x => { const id = bggId_(x.r[COL.BGG - 1]); if (id && !have[id] && need.indexOf(id) < 0) need.push(id); });
   }
   const started = Date.now();
-  const bgf = bgfRows_();
+  const fresh = [];
   need.forEach(id => {
-    if (Date.now() - started > 300000) return;   // stay under the 6 min limit; run again for the rest
-    try { writeCache_(id, bggDetails_(id, bgf)); } catch (e) { Logger.log(id + ': ' + e.message); }
-    if (props_().getProperty('BGG_TOKEN')) Utilities.sleep(1500);   // stay well inside BGG's rate limits
+    if (Date.now() - started > 240000) return;   // stay under the 6 min limit; the next run does the rest
+    try { fresh.push([id, bggDetails_(id, bgf)]); } catch (e) { /* not on BGFinder and no token yet */ }
+    if (token) Utilities.sleep(1500);   // stay well inside BGG's rate limits
   });
+  writeCacheBulk_(fresh);
   bustCache_();
   Logger.log('Cached ' + need.length + ' games');
 }
 
-function nightly() { refreshBgfinder(); fillBggCache(); }
+/** Rank, rating and year for every game from the public daily BGG ranks file (no token needed). */
+function refreshRanks() {
+  let csv = '';
+  for (let back = 0; back < 4 && !csv; back++) {
+    const d = new Date(Date.now() - back * 86400000);
+    const r = UrlFetchApp.fetch(RANKS_REPO + Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd') + '.csv', { muteHttpExceptions: true });
+    if (r.getResponseCode() === 200) csv = r.getContentText();
+  }
+  if (!csv) return 0;
+  const want = {};
+  sheetGames_().forEach(g => { if (g.id) want[g.id] = g.name; });
+  const rows = Utilities.parseCsv(csv);
+  const pairs = [];
+  rows.slice(1).forEach(r => {
+    if (want[r[0]]) pairs.push([r[0], { name: r[1], year: r[2], rank: r[3], rating: (+r[4]).toFixed(2), thumb: '' }]);
+  });
+  writeCacheBulk_(pairs);
+  return pairs.length;
+}
+
+function sheetGames_() {
+  const ss = ss_(), out = [];
+  for (const t in CAT_TABS) {
+    const sh = ss.getSheetByName(t);
+    if (sh) rowsOf_(sh).forEach(x => out.push({ name: String(x.r[0]).trim(), id: bggId_(x.r[COL.BGG - 1]), sh: sh, row: x.row, r: x.r }));
+  }
+  return out;
+}
+
+/** Counterfeit / budget sellers: reads their public Shopify product lists and keeps the listings that match our games. */
+function refreshCounterfeit() {
+  const sh = ss_().getSheetByName(TAB_FAKE);
+  if (!sh || sh.getLastRow() < 2) return 0;
+  const stores = sh.getRange(2, 1, sh.getLastRow() - 1, 2).getDisplayValues().filter(r => r[0] && r[1]);
+  const games = sheetGames_().map(g => ({ name: g.name, key: ' ' + normT_(g.name) + ' ' }));
+  const VARIANT = /\b(expansion|extension|mini|junior|kids|pocket|travel|first journey|damage|damaged|sleeves?|insert|organi[sz]er|playmat|promo|booster|refill|replacement|puzzle|jigsaw|keychain|t shirt|poster)\b/;
+  const GENERIC = { '': 1, board: 1, card: 1, game: 1, games: 1, strategy: 1, party: 1, family: 1, the: 1, by: 1, from: 1, english: 1, hindi: 1, edition: 1, original: 1, classic: 1, base: 1, core: 1, new: 1, deluxe: 1, cooperative: 1, a: 1, award: 1, trade: 1, '2': 1 };
+  const out = [], now = new Date();
+  stores.forEach(([store, site]) => {
+    let host;
+    try { host = site.match(/^https?:\/\/([^/]+)/)[1]; } catch (e) { return; }
+    const products = [];
+    for (let page = 1; page <= 40; page++) {
+      const r = UrlFetchApp.fetch('https://' + host + '/products.json?limit=250&page=' + page, { muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0 board-game-shelf' } });
+      if (r.getResponseCode() !== 200) break;
+      let list;
+      try { list = JSON.parse(r.getContentText()).products || []; } catch (e) { break; }
+      if (!list.length) break;
+      list.forEach(p => products.push({ title: p.title, key: ' ' + normT_(p.title) + ' ', handle: p.handle,
+        price: +(p.variants && p.variants[0] && p.variants[0].price || 0), inStock: (p.variants || []).some(v => v.available) }));
+    }
+    games.forEach(g => {
+      const hits = products.filter(p => {
+        const i = p.key.indexOf(g.key);
+        if (i < 0) return false;
+        const extra = p.key.replace(g.key, ' ');
+        if (VARIANT.test(extra) && !VARIANT.test(g.key)) return false;
+        const next = p.key.slice(i + g.key.length).trim().split(' ')[0] || '';
+        const short = g.key.trim().split(' ').length === 1 && g.key.trim().length <= 6;
+        return !short || GENERIC[next];
+      }).sort((a, b) => (b.inStock - a.inStock) || (a.price - b.price)).slice(0, 3);
+      hits.forEach(p => out.push([g.name, store, p.title, p.price, p.inStock, 'https://' + host + '/products/' + p.handle, now]));
+    });
+  });
+  const fs = tab_(TAB_FAKE_PRICES, FAKE_HEAD);
+  if (fs.getLastRow() > 1) fs.getRange(2, 1, fs.getLastRow() - 1, FAKE_HEAD.length).clearContent();
+  if (out.length) fs.getRange(2, 1, out.length, FAKE_HEAD.length).setValues(out);
+  bustCache_();
+  return out.length;
+}
+
+function normT_(s) {
+  return String(s || '').normalize('NFKD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/&/g, ' and ').replace(/[^a-z0-9]+/g, ' ').trim();
+}
+
+/** With a BGG token: finds missing BGG ids by exact name and fills blank players / time / age / weight / genre / tags. */
+function fillFromBgg() {
+  if (!props_().getProperty('BGG_TOKEN')) return 0;
+  const started = Date.now();
+  let done = 0;
+  sheetGames_().forEach(g => {
+    if (Date.now() - started > 240000) return;
+    const blanks = [1, 2, 3, 4, 5, 6, 7, 8].filter(i => !String(g.r[i]).trim());
+    if (g.id && !blanks.length) return;
+    try {
+      let id = g.id;
+      if (!id) {
+        const hit = bggSearch_(g.name).find(h => normT_(h.name) === normT_(g.name));
+        if (!hit) return;
+        id = hit.id;
+        g.sh.getRange(g.row, COL.BGG).setValue('https://boardgamegeek.com/boardgame/' + id);
+      }
+      const d = bggDetails_(id);
+      const vals = { 1: d.minP, 2: d.maxP, 3: d.minT, 4: d.maxT, 5: d.age, 6: d.weight, 7: d.suggest.genre, 8: d.suggest.tags };
+      blanks.forEach(i => { if (vals[i] !== '' && vals[i] != null) g.sh.getRange(g.row, i + 1).setValue(vals[i]); });
+      writeCacheBulk_([[id, d]]);
+      done++;
+      Utilities.sleep(1500);
+    } catch (e) { Logger.log(g.name + ': ' + e.message); }
+  });
+  bustCache_();
+  return done;
+}
+
+/** First run only: copies the starter list of expansions / editions / accessories into the EXTRAS tab. */
+function seedExtras_() {
+  const sh = tab_(TAB_EXTRAS, EXTRAS_HEAD);
+  if (sh.getLastRow() > 1) return;
+  const r = UrlFetchApp.fetch(EXTRAS_SEED_URL + '?t=' + Date.now(), { muteHttpExceptions: true });
+  if (r.getResponseCode() !== 200) return;
+  const rows = JSON.parse(r.getContentText()).filter(x => x[0] !== 'BASE GAME');
+  if (rows.length) sh.getRange(2, 1, rows.length, EXTRAS_HEAD.length).setValues(rows);
+  sh.setColumnWidth(3, 320);
+}
+
+function nightly() {
+  const steps = [refreshBgfinder, fillBggCache, refreshRanks, fillFromBgg, refreshCounterfeit];
+  steps.forEach(fn => { try { fn(); } catch (e) { Logger.log(fn.name + ': ' + e.message); } });
+  bustCache_();
+}
+
+/** Quick part of the v2 upgrade (runs inside a page request); the slow refresh is scheduled a minute later. */
+function setupV2_() {
+  seedExtras_();
+  const os = ss_().getSheetByName(OWNED_TAB);
+  if (os) ensureOwnedEdition_(os);
+  const ud = tab_(TAB_USERS, USER_HEAD);
+  if (!ud.getRange(1, USER_HEAD.length).getDisplayValue()) ud.getRange(1, USER_HEAD.length).setValue('EDITION').setFontWeight('bold');
+  const fake = tab_(TAB_FAKE, ['STORE', 'WEBSITE', 'SEARCH URL ({q} = game name)']);
+  const names = fake.getLastRow() > 1 ? fake.getRange(2, 1, fake.getLastRow() - 1, 1).getDisplayValues().map(r => r[0].toLowerCase()) : [];
+  if (names.indexOf('funkky') < 0) fake.appendRow(['Funkky', '', '']);
+  tab_(TAB_FAKE_PRICES, FAKE_HEAD);
+  ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'nightly').forEach(t => ScriptApp.deleteTrigger(t));
+  ScriptApp.newTrigger('nightly').timeBased().everyDays(1).atHour(4).create();
+  ScriptApp.newTrigger('nightly').timeBased().after(60 * 1000).create();
+}
 
 /** Run once from the editor. Creates the helper tabs, adds ALSO IN, schedules a nightly refresh. */
 function setup() {
@@ -734,5 +934,7 @@ function setup() {
   ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'nightly').forEach(t => ScriptApp.deleteTrigger(t));
   ScriptApp.newTrigger('nightly').timeBased().everyDays(1).atHour(4).create();
   props_().setProperty('SETUP_V1', new Date().toISOString());
+  setupV2_();
+  props_().setProperty('SETUP_V2', new Date().toISOString());
   nightly();
 }

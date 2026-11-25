@@ -34,6 +34,9 @@ def sheet_csv(tab):
 def main():
     all_csv = open(sys.argv[1], encoding="utf-8").read() if len(sys.argv) > 1 else sheet_csv("ALL")
     bgf_html = open(sys.argv[2], encoding="utf-8").read() if len(sys.argv) > 2 else get("https://www.bgfindertool.com/")
+    ranks = {}
+    if len(sys.argv) > 3:
+        ranks = {r["ID"]: r for r in csv.DictReader(open(sys.argv[3], encoding="utf-8"))}
 
     a = bgf_html.index('id="products-data">') + len('id="products-data">')
     listings = json.loads(bgf_html[a:bgf_html.index("</script>", a)])
@@ -54,6 +57,7 @@ def main():
              for o in by_id.get(bid, [])),
             key=lambda o: o["price"] or 1e9)
         meta = by_id.get(bid, [{}])[0]
+        rk = ranks.get(bid, {})
         games.append({
             "name": name, "category": r.get("CATEGORY", "Boards"), "alsoIn": [],
             "minP": num(r.get("MIN PLAYERS")), "maxP": num(r.get("MAX PLAYERS")),
@@ -61,9 +65,9 @@ def main():
             "weight": num(r.get("BGG WEIGHT")), "genre": r.get("GENRE", ""),
             "tags": [t.strip() for t in (r.get("TAGS") or "").split(",") if t.strip()],
             "price": num(r.get("PRICE ₹")), "buyLink": r.get("BUY LINK", ""), "bggLink": r.get("BGG LINK", ""),
-            "bggId": bid, "year": num(meta.get("yearPublishedValue")), "image": meta.get("Image", ""),
-            "thumb": meta.get("Thumbnail", ""), "bggRating": round(meta["bggRating"], 2) if meta.get("bggRating") else None,
-            "bggRank": int(meta["bggRank"]) if meta.get("bggRank") else None,
+            "bggId": bid, "year": num(meta.get("yearPublishedValue")) or num(rk.get("Year")), "image": meta.get("Image", ""),
+            "thumb": meta.get("Thumbnail", ""), "bggRating": round(meta["bggRating"], 2) if meta.get("bggRating") else (float(rk["Average"]) if rk.get("Average") else None),
+            "bggRank": int(meta["bggRank"]) if meta.get("bggRank") else (int(rk["Rank"]) if rk.get("Rank") else None),
             "mechanics": meta.get("mechanicsList", []), "bggCategories": meta.get("categoriesList", []),
             "designers": meta.get("designersList", []), "bestPlayers": "",
             "description": (meta.get("Description") or "")[:700], "offers": offers,
