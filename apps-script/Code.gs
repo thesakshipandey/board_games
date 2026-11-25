@@ -36,6 +36,9 @@ const TAB_EXTRAS = 'EXTRAS';
 const EXTRAS_HEAD = ['BASE GAME', 'TYPE', 'NAME', 'BGG LINK', 'PRICE ₹', 'STORE', 'BUY LINK', 'NOTE'];
 const EXTRAS_SEED_URL = 'https://thesakshipandey.github.io/boardgame/data/extras.json';
 const TAB_FAKE_PRICES = 'COUNTERFEIT_PRICES';
+const TAB_FAKE_LIST = 'COUNTERFEIT_LIST';   // hand-kept prices (Funkky catalogue, Shop Befikar checks); never cleared
+const FAKE_LIST_HEAD = ['GAME', 'STORE', 'LISTING', 'PRICE ₹', 'STATUS', 'URL', 'NOTE'];
+const FAKE_LIST_SEED_URL = 'https://thesakshipandey.github.io/boardgame/data/counterfeit_list.json';
 const FAKE_HEAD = ['GAME', 'STORE', 'LISTING', 'PRICE ₹', 'IN STOCK', 'URL', 'UPDATED'];
 const RANKS_REPO = 'https://raw.githubusercontent.com/beefsack/bgg-ranking-historicals/master/';
 const CACHE_KEY = 'catalog_v1';
@@ -240,6 +243,13 @@ function buildCatalog_() {
     fs.getRange(2, 1, fs.getLastRow() - 1, 6).getValues().forEach(r => {
       if (!r[0]) return;
       (fakes[norm_(r[0])] = fakes[norm_(r[0])] || []).push({ store: r[1], listing: r[2], price: num_(r[3]), inStock: r[4] === true || r[4] === 'TRUE', url: r[5] });
+    });
+  }
+  const fl = ss.getSheetByName(TAB_FAKE_LIST);
+  if (fl && fl.getLastRow() > 1) {
+    fl.getRange(2, 1, fl.getLastRow() - 1, FAKE_LIST_HEAD.length).getDisplayValues().forEach(r => {
+      if (!r[0]) return;
+      (fakes[norm_(r[0])] = fakes[norm_(r[0])] || []).push({ store: r[1], listing: r[2], price: num_(r[3]), status: r[4], url: r[5], note: r[6] });
     });
   }
   const games = [];
@@ -885,13 +895,20 @@ function fillFromBgg() {
 
 /** First run only: copies the starter list of expansions / editions / accessories into the EXTRAS tab. */
 function seedExtras_() {
-  const sh = tab_(TAB_EXTRAS, EXTRAS_HEAD);
+  seedTab_(TAB_EXTRAS, EXTRAS_HEAD, EXTRAS_SEED_URL);
+  seedTab_(TAB_FAKE_LIST, FAKE_LIST_HEAD, FAKE_LIST_SEED_URL);
+}
+
+/** Fills an empty tab from a JSON file on the website (first row = header). Never overwrites your edits. */
+function seedTab_(name, head, url) {
+  const sh = tab_(name, head);
+  if (!sh.getRange(1, 1).getDisplayValue()) sh.getRange(1, 1, 1, head.length).setValues([head]).setFontWeight('bold');
   if (sh.getLastRow() > 1) return;
-  const r = UrlFetchApp.fetch(EXTRAS_SEED_URL + '?t=' + Date.now(), { muteHttpExceptions: true });
+  const r = UrlFetchApp.fetch(url + '?t=' + Date.now(), { muteHttpExceptions: true });
   if (r.getResponseCode() !== 200) return;
-  const rows = JSON.parse(r.getContentText()).filter(x => x[0] !== 'BASE GAME');
-  if (rows.length) sh.getRange(2, 1, rows.length, EXTRAS_HEAD.length).setValues(rows);
-  sh.setColumnWidth(3, 320);
+  const rows = JSON.parse(r.getContentText()).slice(1).map(x => head.map((_, i) => x[i] == null ? '' : x[i]));
+  if (rows.length) sh.getRange(2, 1, rows.length, head.length).setValues(rows);
+  sh.setFrozenRows(1);
 }
 
 function nightly() {
