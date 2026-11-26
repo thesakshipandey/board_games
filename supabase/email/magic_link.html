@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light only"><title>Your sign-in link</title></head>
+<body style="margin:0;padding:0;background:#f4f1ee">
+<span style="display:none!important;opacity:0;color:transparent;max-height:0;overflow:hidden">Your sign-in link for The Game Shelf.</span>
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="background:#f4f1ee"><tr><td align="center" style="padding:32px 14px">
+<table role="presentation" width="100%" cellspacing="0" cellpadding="0" style="max-width:560px;background:#ffffff;border-radius:22px;overflow:hidden;box-shadow:0 10px 40px rgba(29,26,25,.08)">
+<tr><td style="padding:0;background:#141212;background-image:linear-gradient(135deg,#6f4fb0 0%,#b76f6a 55%,#e7a98a 100%)">
+  <table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr>
+    <td style="padding:26px 40px;font:700 13px -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,Helvetica,Arial,sans-serif;letter-spacing:.16em;text-transform:uppercase;color:#ffffff">&#127922;&nbsp; The Game Shelf</td>
+  </tr></table></td></tr>
+<tr><td style="padding:36px 40px 6px;font:600 26px/1.2 -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,Helvetica,Arial,sans-serif;letter-spacing:-.02em;color:#1d1a19">Your sign-in link</td></tr>
+<tr><td style="padding:8px 40px 18px;font:400 15.5px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,Helvetica,Arial,sans-serif;color:#3d3836">Use the button below to sign in as <b>{{ .Email }}</b>. No password needed.</td></tr>
+
+<tr><td style="padding:8px 40px 6px">
+  <table role="presentation" cellspacing="0" cellpadding="0"><tr><td style="border-radius:999px;background:#1d1a19">
+    <a href="{{ .ConfirmationURL }}" style="display:inline-block;padding:14px 30px;font:600 15px -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,Helvetica,Arial,sans-serif;color:#ffffff;text-decoration:none;border-radius:999px">Sign in</a>
+  </td></tr></table></td></tr>
+<tr><td style="padding:14px 40px 0;font:400 12.5px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,Helvetica,Arial,sans-serif;color:#6f6965">
+  Button not working? Paste this link into your browser:<br>
+  <a href="{{ .ConfirmationURL }}" style="color:#c9785a;word-break:break-all">{{ .ConfirmationURL }}</a></td></tr>
+<tr><td style="padding:18px 40px 0;font:400 13px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,Helvetica,Arial,sans-serif;color:#6f6965">This link expires in 1 hour and can be used once. If you did not ask for it, ignore this email.</td></tr>
+<tr><td style="padding:30px 40px 34px"><table role="presentation" width="100%" cellspacing="0" cellpadding="0"><tr><td style="border-top:1px solid #ece7e3;padding-top:18px;font:400 12px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI',Inter,Roboto,Helvetica,Arial,sans-serif;color:#6f6965">
+  The Game Shelf &middot; board, card and duel games with Indian store prices<br>
+  <a href="https://thesakshipandey.github.io/boardgame/" style="color:#6f6965">thesakshipandey.github.io/boardgame/</a> &middot; Made with &#9829; by Sakshi
+</td></tr></table></td></tr>
+</table></td></tr></table></body></html>

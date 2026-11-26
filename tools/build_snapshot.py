@@ -1,106 +1,80 @@
-"""Build data/snapshot.json: a PUBLIC fallback catalogue for the website.
+"""data/snapshot.json: the public fallback catalogue the site uses if the database can't be reached.
 
-The live site reads from the Apps Script API. This snapshot is only used when the API
-is not configured or not reachable. It deliberately leaves out STATUS, INTEREST, OWNED
-and every other personal field.
+Same shape as the database's catalog() function. No personal data.
 
-Usage:  python3 -I tools/build_snapshot.py  [path/to/ALL.csv]  [path/to/bgfinder.html]
-With no arguments it downloads both (the sheet must be link-readable for that).
+  python3 -I tools/build_snapshot.py --live <supabase.env>      dump the live catalogue (normal use)
+  python3 -I tools/build_snapshot.py --local <workdir>          build from the sheet CSVs + BGG/BGFinder files
 """
-import csv, io, json, re, sys, urllib.request, datetime, pathlib
+import csv, datetime, json, pathlib, re, sys, urllib.request
 
-SHEET = "1bVzKKQcmN8jfEko9kLpyU68IGIFu5IYuD-vKCl3TtDc"
-UA = {"User-Agent": "Mozilla/5.0 board-game-shelf"}
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(ROOT / 'tools'))
 
 
-def get(url):
-    with urllib.request.urlopen(urllib.request.Request(url, headers=UA), timeout=60) as r:
-        return r.read().decode("utf-8")
+def live(env_path):
+    from supabase_setup import load_env
+    env = load_env(env_path)
+    key = env['SUPABASE_ANON_KEY']
+    req = urllib.request.Request(env['SUPABASE_URL'] + '/rest/v1/rpc/catalog', method='POST', data=b'{}',
+                                 headers={'apikey': key, 'Content-Type': 'application/json'})
+    if key.startswith('eyJ'):
+        req.add_header('Authorization', 'Bearer ' + key)
+    return json.loads(urllib.request.urlopen(req, timeout=60).read())
 
 
-def num(s):
-    s = re.sub(r"[^0-9.\-]", "", str(s or ""))
-    try:
-        return float(s) if "." in s else int(s)
-    except ValueError:
-        return None
-
-
-def sheet_csv(tab):
-    return get(f"https://docs.google.com/spreadsheets/d/{SHEET}/gviz/tq?tqx=out:csv&sheet={tab}")
+def local(work):
+    from seed_supabase import STORES, FAKE_STORES, TABS, num, bgg_id, norm
+    work = pathlib.Path(work)
+    things = json.loads((work / 'bgg' / 'things.json').read_text())
+    offers = {}
+    for x in json.loads((work / 'bgf2.json').read_text()):
+        if str(x.get('bggId') or '').strip() and not x.get('Ignore'):
+            offers.setdefault(int(x['bggId']), []).append({'listing': x['name'], 'store': x['store'], 'price': num(x.get('priceValue')), 'status': x.get('status'), 'url': x['url']})
+    extras, fakes = {}, {}
+    for r in json.loads((ROOT / 'data' / 'extras.json').read_text())[1:]:
+        extras.setdefault(norm(r[0]), []).append({'type': r[1], 'name': r[2], 'bgg': r[3] or None, 'price': num(r[4]), 'store': r[5] or None, 'buy': r[6] or None, 'note': r[7] or None})
+    for r in json.loads((ROOT / 'data' / 'counterfeit_list.json').read_text())[1:]:
+        fakes.setdefault(norm(r[0]), []).append({'store': r[1], 'listing': r[2], 'price': num(r[3]), 'status': r[4] or None, 'url': r[5] or None, 'note': r[6] or None})
+    games, gid = [], 0
+    for tab, cat in TABS.items():
+        for r in list(csv.reader(open(work / 'bgg' / (tab + '.csv'), encoding='utf-8')))[1:]:
+            r = (r + [''] * 16)[:16]
+            if not r[0].strip():
+                continue
+            gid += 1
+            bid = bgg_id(r[12])
+            b = things.get(str(bid), {}) if bid else {}
+            d = b.get('description') or ''
+            cut = len(d) > 900
+            games.append({
+                'id': gid, 'name': r[0].strip(), 'category': cat,
+                'alsoIn': [x.strip() for x in re.split(r'[,/]', r[15]) if x.strip() in ('Boards', 'Cards', 'Duels')],
+                'minP': num(r[1]), 'maxP': num(r[2]), 'minT': num(r[3]), 'maxT': num(r[4]), 'age': num(r[5]),
+                'weight': num(r[6], float), 'genre': r[7].strip() or None, 'tags': [t.strip() for t in r[8].split(',') if t.strip()],
+                'price': num(r[10]), 'buyLink': r[11].strip() or None, 'bggId': bid,
+                'bggLink': f'https://boardgamegeek.com/boardgame/{bid}' if bid else None,
+                'year': num(b.get('year')), 'image': b.get('image') or None, 'thumb': b.get('thumb') or None,
+                'bggRating': num(b.get('rating'), float), 'bggRank': int(b['rank']) if str(b.get('rank', '')).isdigit() else None,
+                'bestPlayers': b.get('bestPlayers') or None, 'mechanics': b.get('mechanics', []), 'bggCategories': b.get('categories', []),
+                'designers': b.get('designers', []), 'description': re.sub(r'[\s,;:.]+\S*$', '', d[:900]) if cut else (d or None),
+                'descriptionCut': cut, 'offers': sorted(offers.get(bid, []), key=lambda o: o['price'] or 1e9),
+                'extras': extras.get(norm(r[0]), []), 'fakes': fakes.get(norm(r[0]), []),
+            })
+    now = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    return {'games': sorted(games, key=lambda g: g['name'].lower()),
+            'stores': [{'name': n, 'url': u, 'search': s} for n, u, s in STORES],
+            'counterfeit': [{'name': n, 'url': u or None, 'search': s or None} for n, u, s in FAKE_STORES],
+            'pricesUpdated': now, 'bggUpdated': now, 'built': now}
 
 
 def main():
-    all_csv = open(sys.argv[1], encoding="utf-8").read() if len(sys.argv) > 1 else sheet_csv("ALL")
-    bgf_html = open(sys.argv[2], encoding="utf-8").read() if len(sys.argv) > 2 else get("https://www.bgfindertool.com/")
-    ranks = {}
-    if len(sys.argv) > 3:
-        ranks = {r["ID"]: r for r in csv.DictReader(open(sys.argv[3], encoding="utf-8"))}
-
-    a = bgf_html.index('id="products-data">') + len('id="products-data">')
-    listings = json.loads(bgf_html[a:bgf_html.index("</script>", a)])
-    by_id = {}
-    for x in listings:
-        if x.get("bggId") and not x.get("Ignore"):
-            by_id.setdefault(str(x["bggId"]), []).append(x)
-
-    games = []
-    for r in csv.DictReader(io.StringIO(all_csv)):
-        name = (r.get("GAME") or "").strip()
-        if not name:
-            continue
-        m = re.search(r"boardgame(?:expansion)?/(\d+)", r.get("BGG LINK") or "")
-        bid = m.group(1) if m else ""
-        offers = sorted(
-            ({"listing": o["name"], "store": o["store"], "price": o.get("priceValue"), "status": o.get("status"), "url": o["url"]}
-             for o in by_id.get(bid, [])),
-            key=lambda o: o["price"] or 1e9)
-        meta = by_id.get(bid, [{}])[0]
-        rk = ranks.get(bid, {})
-        games.append({
-            "name": name, "category": r.get("CATEGORY", "Boards"), "alsoIn": [],
-            "minP": num(r.get("MIN PLAYERS")), "maxP": num(r.get("MAX PLAYERS")),
-            "minT": num(r.get("MIN TIME")), "maxT": num(r.get("MAX TIME")), "age": num(r.get("AGE")),
-            "weight": num(r.get("BGG WEIGHT")), "genre": r.get("GENRE", ""),
-            "tags": [t.strip() for t in (r.get("TAGS") or "").split(",") if t.strip()],
-            "price": num(r.get("PRICE ₹")), "buyLink": r.get("BUY LINK", ""), "bggLink": r.get("BGG LINK", ""),
-            "bggId": bid, "year": num(meta.get("yearPublishedValue")) or num(rk.get("Year")), "image": meta.get("Image", ""),
-            "thumb": meta.get("Thumbnail", ""), "bggRating": round(meta["bggRating"], 2) if meta.get("bggRating") else (float(rk["Average"]) if rk.get("Average") else None),
-            "bggRank": int(meta["bggRank"]) if meta.get("bggRank") else (int(rk["Rank"]) if rk.get("Rank") else None),
-            "mechanics": meta.get("mechanicsList", []), "bggCategories": meta.get("categoriesList", []),
-            "designers": meta.get("designersList", []), "bestPlayers": "",
-            "description": (meta.get("Description") or "")[:700], "offers": offers,
-        })
-
-    stores = [
-        ["Board Games India", "https://www.boardgamesindia.com/"], ["The Board Room", "https://shop.theboardroomindia.com/"],
-        ["Owls On Board", "https://www.owlsonboard.com/"], ["Shuffle Games", "https://shufflegames.co.in/"],
-        ["Bored Game Co", "https://boredgamecompany.com/"], ["Hextasy", "https://hextasy.in/"],
-        ["Big Friendly Games", "https://bigfriendlygames.com/"], ["Tabletop Universe", "https://www.tabletopuniverse.com/"],
-        ["Gameistry", "https://www.gameistry.in/"], ["Bookswagon", "https://www.bookswagon.com/"],
-        ["Boardway", "https://boardway.in/"], ["Cryptic Cardboard", "https://ccbgames.in/"],
-    ]
-    out = {
-        "games": games,
-        "stores": [{"name": n, "url": u} for n, u in stores],
-        "counterfeit": [
-            {"name": "Satyams", "url": "https://www.satyamstationers.com/", "search": "https://www.satyamstationers.com/search?q={q}"},
-            {"name": "Jaiman Toys", "url": "https://jaimantoys.com/", "search": "https://jaimantoys.com/search?q={q}"},
-            {"name": "Shop Befikar", "url": "https://shopbefikar.com/", "search": "https://shopbefikar.com/search?q={q}"},
-        ],
-        "genres": [],
-        "bgfUpdated": datetime.date.today().isoformat(),
-        "built": datetime.datetime.now(datetime.timezone.utc).isoformat(),
-        "snapshot": True,
-    }
-    dest = ROOT / "data" / "snapshot.json"
-    dest.parent.mkdir(exist_ok=True)
-    dest.write_text(json.dumps(out, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    with_art = sum(1 for g in games if g["image"])
-    with_offers = sum(1 for g in games if g["offers"])
-    print(f"{len(games)} games, {with_art} with art, {with_offers} with live India offers -> {dest}")
+    mode, arg = sys.argv[1], sys.argv[2]
+    out = live(arg) if mode == '--live' else local(arg)
+    out['snapshot'] = True
+    dest = ROOT / 'data' / 'snapshot.json'
+    dest.write_text(json.dumps(out, ensure_ascii=False, separators=(',', ':')), encoding='utf-8')
+    print(f"{len(out['games'])} games -> {dest} ({dest.stat().st_size // 1024} KB)")
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
