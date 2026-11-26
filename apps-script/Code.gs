@@ -10,7 +10,8 @@
  * Script properties (Project Settings > Script properties):
  *   GOOGLE_CLIENT_ID  optional: only if you change the OAuth client (DEFAULT_CLIENT_ID below is already set)
  *   ADMIN_EMAILS      comma list of emails allowed to add games (default: you, the script owner)
- *   BGG_TOKEN         BoardGameGeek API application token (optional, boardgamegeek.com/applications)
+ *   BGG_TOKEN         BoardGameGeek XML API token (boardgamegeek.com/applications > your app > Tokens).
+ *                     Keep it here only: never in this file or on the website.
  * Then run setup() once from the editor.
  *
  * Public callers get the catalogue only: no STATUS, INTEREST, price paid or ratings.
@@ -272,7 +273,7 @@ function buildCatalog_() {
         bggRating: c ? num_(c[5]) : null, bggRank: c ? num_(c[6]) : null,
         mechanics: c && c[8] ? c[8].split('|') : [], bggCategories: c && c[9] ? c[9].split('|') : [],
         designers: c && c[10] ? c[10].split('|') : [], bestPlayers: c ? c[11] : '',
-        description: c ? String(c[12]).slice(0, 450) : '',
+        description: c ? clip_(c[12], 900) : '', descriptionCut: !!c && String(c[12]).length > 900,
         offers: (offers[id] || []).sort((a, b) => (a.price || 1e9) - (b.price || 1e9)),
         extras: extras[norm_(r[0])] || [],
         fakes: (fakes[norm_(r[0])] || []).sort((a, b) => (b.inStock - a.inStock) || ((a.price || 1e9) - (b.price || 1e9)))
@@ -486,14 +487,31 @@ function saveUser_(user, name, f) {
 
 /* ------------------------------------------------------------------ BGG + BGFinder */
 
+// BGG asks for about 5 s between requests. 202 = queued (ask again later); 429/500/503 = slow down.
+const BGG_PAUSE_MS = 5000;
+const BGG_BATCH = 20;   // max ids per /thing request
+
 function bggFetch_(path) {
-  const token = props_().getProperty('BGG_TOKEN');
+  const token = String(props_().getProperty('BGG_TOKEN') || '').trim();
   if (!token) return null;
-  const r = UrlFetchApp.fetch('https://boardgamegeek.com/xmlapi2/' + path, {
-    headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
-  if (r.getResponseCode() === 202) { Utilities.sleep(2000); return bggFetch_(path); }
-  if (r.getResponseCode() !== 200) return null;
-  return XmlService.parse(r.getContentText()).getRootElement();
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const r = UrlFetchApp.fetch('https://boardgamegeek.com/xmlapi2/' + path, {
+      headers: { Authorization: 'Bearer ' + token }, muteHttpExceptions: true });
+    const code = r.getResponseCode();
+    if (code === 200) return XmlService.parse(r.getContentText()).getRootElement();
+    if (code === 202 || code === 429 || code >= 500) { Utilities.sleep(BGG_PAUSE_MS * (attempt + 1)); continue; }
+    if (code === 401 || code === 403) throw new Error('BGG refused the token (HTTP ' + code + '). Check the BGG_TOKEN script property.');
+    return null;
+  }
+  return null;
+}
+
+/** One request for up to 20 games. Returns { id: details } (no store data). */
+function bggThings_(ids) {
+  const root = bggFetch_('thing?stats=1&id=' + ids.join(','));
+  const out = {};
+  if (root) root.getChildren('item').forEach(item => { const d = bggItem_(item); out[d.id] = d; });
+  return out;
 }
 
 function bgfRows_() {
@@ -533,35 +551,43 @@ function bggDetails_(id, bgfCache) {
   let d = null;
   const root = bggFetch_('thing?stats=1&id=' + id);
   const item = root && root.getChild('item');
-  if (item) {
-    const val = (n) => { const c = item.getChild(n); return c ? c.getAttribute('value').getValue() : ''; };
-    const links = (type) => item.getChildren('link').filter(l => l.getAttribute('type').getValue() === type).map(l => l.getAttribute('value').getValue());
-    const primary = item.getChildren('name').find(n => n.getAttribute('type').getValue() === 'primary');
-    const st = item.getChild('statistics').getChild('ratings');
-    const rank = st.getChild('ranks').getChildren('rank').find(r => r.getAttribute('name').getValue() === 'boardgame');
-    let best = '';
-    const poll = item.getChildren('poll').find(p => p.getAttribute('name').getValue() === 'suggested_numplayers');
-    if (poll) {
-      let top = -1;
-      poll.getChildren('results').forEach(rs => {
-        const b = rs.getChildren('result').find(x => x.getAttribute('value').getValue() === 'Best');
-        const votes = b ? +b.getAttribute('numvotes').getValue() : 0;
-        if (votes > top) { top = votes; best = rs.getAttribute('numplayers').getValue(); }
-      });
-    }
-    d = {
-      id: id, name: primary ? primary.getAttribute('value').getValue() : id,
-      year: val('yearpublished'), minP: +val('minplayers'), maxP: +val('maxplayers'),
-      minT: +val('minplaytime') || +val('playingtime'), maxT: +val('maxplaytime') || +val('playingtime'),
-      age: +val('minage'), weight: +(+st.getChild('averageweight').getAttribute('value').getValue()).toFixed(2),
-      rating: +(+st.getChild('average').getAttribute('value').getValue()).toFixed(2),
-      rank: rank ? rank.getAttribute('value').getValue() : '',
-      image: item.getChildText('image') || '', thumb: item.getChildText('thumbnail') || '',
-      mechanics: links('boardgamemechanic'), categories: links('boardgamecategory'),
-      designers: links('boardgamedesigner'), bestPlayers: best,
-      description: decode_(item.getChildText('description') || '')
-    };
+  if (item) d = bggItem_(item);
+  return withStores_(d, id, bgfCache);
+}
+
+function bggItem_(item) {
+  const id = item.getAttribute('id').getValue();
+  const val = (n) => { const c = item.getChild(n); return c ? c.getAttribute('value').getValue() : ''; };
+  const links = (type) => item.getChildren('link').filter(l => l.getAttribute('type').getValue() === type).map(l => l.getAttribute('value').getValue());
+  const primary = item.getChildren('name').find(n => n.getAttribute('type').getValue() === 'primary');
+  const st = item.getChild('statistics').getChild('ratings');
+  const rank = st.getChild('ranks').getChildren('rank').find(r => r.getAttribute('name').getValue() === 'boardgame');
+  let best = '';
+  const poll = item.getChildren('poll').find(p => p.getAttribute('name').getValue() === 'suggested_numplayers');
+  if (poll) {
+    let top = -1;
+    poll.getChildren('results').forEach(rs => {
+      const b = rs.getChildren('result').find(x => x.getAttribute('value').getValue() === 'Best');
+      const votes = b ? +b.getAttribute('numvotes').getValue() : 0;
+      if (votes > top) { top = votes; best = rs.getAttribute('numplayers').getValue(); }
+    });
   }
+  return {
+    id: id, name: primary ? primary.getAttribute('value').getValue() : id,
+    year: val('yearpublished'), minP: +val('minplayers'), maxP: +val('maxplayers'),
+    minT: +val('minplaytime') || +val('playingtime'), maxT: +val('maxplaytime') || +val('playingtime'),
+    age: +val('minage'), weight: +(+st.getChild('averageweight').getAttribute('value').getValue()).toFixed(2),
+    rating: +(+st.getChild('average').getAttribute('value').getValue()).toFixed(2),
+    rank: rank ? rank.getAttribute('value').getValue() : '',
+    image: item.getChildText('image') || '', thumb: item.getChildText('thumbnail') || '',
+    mechanics: links('boardgamemechanic'), categories: links('boardgamecategory'),
+    designers: links('boardgamedesigner'), bestPlayers: best,
+    description: decode_(item.getChildText('description') || '')
+  };
+}
+
+/** Adds India store listings (and falls back to BGFinder's copy of the BGG data when there is no token). */
+function withStores_(d, id, bgfCache) {
   const listings = (bgfCache || bgfRows_()).filter(r => String(r[0]) === id);
   if (!d && listings.length) {
     const r = listings[0];
@@ -578,9 +604,21 @@ function bggDetails_(id, bgfCache) {
   return d;
 }
 
+/** Shortens text at a word boundary (BGG's text itself is not changed; the page links to the full version). */
+function clip_(s, n) {
+  s = String(s || '');
+  if (s.length <= n) return s;
+  const cut = s.slice(0, n);
+  return cut.slice(0, Math.max(cut.lastIndexOf(' '), n - 40)).replace(/[\s,;:.]+$/, '');
+}
+
 function decode_(s) {
-  return String(s).replace(/&#10;/g, '\n').replace(/&amp;/g, '&').replace(/&quot;/g, '"')
-    .replace(/&#39;|&rsquo;/g, "'").replace(/&mdash;/g, '—').replace(/&ndash;/g, '–').replace(/&[a-z]+;/g, ' ');
+  const named = { amp: '&', quot: '"', apos: "'", lt: '<', gt: '>', nbsp: ' ', rsquo: '’', lsquo: '‘', rdquo: '”', ldquo: '“',
+    mdash: '—', ndash: '–', hellip: '…', eacute: 'é', egrave: 'è', uuml: 'ü', ouml: 'ö', auml: 'ä', times: '×', bull: '•' };
+  return String(s)
+    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(+n))
+    .replace(/&#x([0-9a-f]+);/gi, (_, n) => String.fromCharCode(parseInt(n, 16)))
+    .replace(/&([a-z]+);/gi, (m, n) => named[n.toLowerCase()] || m);
 }
 
 const MECH_MAP = {
@@ -678,7 +716,7 @@ function ensureAlsoCol_(sh) {
 function cacheRow_(id, d) {
   return [id, d.name || '', d.year || '', d.image || '', d.thumb || '', d.rating || '', d.rank || '', d.weight || '',
     (d.mechanics || []).join('|'), (d.categories || []).join('|'), (d.designers || []).join('|'), d.bestPlayers || '',
-    String(d.description || '').slice(0, 1500), new Date()];
+    String(d.description || '').slice(0, 5000), new Date()];
 }
 
 /** Upserts many BGG_CACHE rows with one read and one write. Keeps existing rank/rating when the new data has none. */
@@ -703,7 +741,7 @@ function writeCache_(id, d) {
   const sh = tab_(TAB_CACHE, CACHE_HEAD);
   const row = [id, d.name || '', d.year || '', d.image || '', d.thumb || '', d.rating || '', d.rank || '', d.weight || '',
     (d.mechanics || []).join('|'), (d.categories || []).join('|'), (d.designers || []).join('|'), d.bestPlayers || '',
-    String(d.description || '').slice(0, 1500), new Date()];
+    String(d.description || '').slice(0, 5000), new Date()];
   const n = sh.getLastRow();
   const ids = n > 1 ? sh.getRange(2, 1, n - 1, 1).getDisplayValues().map(r => r[0]) : [];
   const i = ids.indexOf(id);
@@ -770,8 +808,11 @@ function fillBggCache() {
   const bgf = bgfRows_();
   const onBgf = {};
   bgf.forEach(r => onBgf[String(r[0])] = 1);
-  // Skip games that already have art, and (without a token) games no source can give art for yet.
-  if (cs.getLastRow() > 1) cs.getRange(2, 1, cs.getLastRow() - 1, 5).getDisplayValues().forEach(r => { if (r[3] || (!token && !onBgf[r[0]])) have[r[0]] = 1; });
+  // Without a token: skip games that already have art, or that no source can give art for yet.
+  // With a token: skip only games already filled from BGG itself (they have the "best players" poll).
+  if (cs.getLastRow() > 1) cs.getRange(2, 1, cs.getLastRow() - 1, 12).getDisplayValues().forEach(r => {
+    if (token ? (r[3] && r[11]) : (r[3] || !onBgf[r[0]])) have[r[0]] = 1;
+  });
   const need = [];
   for (const t in CAT_TABS) {
     const sh = ss.getSheetByName(t);
@@ -779,11 +820,19 @@ function fillBggCache() {
   }
   const started = Date.now();
   const fresh = [];
-  need.forEach(id => {
-    if (Date.now() - started > 240000) return;   // stay under the 6 min limit; the next run does the rest
-    try { fresh.push([id, bggDetails_(id, bgf)]); } catch (e) { /* not on BGFinder and no token yet */ }
-    if (token) Utilities.sleep(1500);   // stay well inside BGG's rate limits
-  });
+  if (token) {
+    // 20 games per request, 5 s apart (BGG's guidance); about 2 minutes for 450 games.
+    for (let i = 0; i < need.length && Date.now() - started < 240000; i += BGG_BATCH) {
+      const got = bggThings_(need.slice(i, i + BGG_BATCH));
+      Object.keys(got).forEach(id => fresh.push([id, got[id]]));
+      Utilities.sleep(BGG_PAUSE_MS);
+    }
+  } else {
+    need.forEach(id => {
+      if (Date.now() - started > 240000) return;   // stay under the 6 min limit; the next run does the rest
+      try { fresh.push([id, bggDetails_(id, bgf)]); } catch (e) { /* not on BGFinder and no token yet */ }
+    });
+  }
   writeCacheBulk_(fresh);
   bustCache_();
   Logger.log('Cached ' + need.length + ' games');
@@ -877,6 +926,7 @@ function fillFromBgg() {
       let id = g.id;
       if (!id) {
         const hit = bggSearch_(g.name).find(h => normT_(h.name) === normT_(g.name));
+        Utilities.sleep(BGG_PAUSE_MS);
         if (!hit) return;
         id = hit.id;
         g.sh.getRange(g.row, COL.BGG).setValue('https://boardgamegeek.com/boardgame/' + id);
@@ -886,7 +936,7 @@ function fillFromBgg() {
       blanks.forEach(i => { if (vals[i] !== '' && vals[i] != null) g.sh.getRange(g.row, i + 1).setValue(vals[i]); });
       writeCacheBulk_([[id, d]]);
       done++;
-      Utilities.sleep(1500);
+      Utilities.sleep(BGG_PAUSE_MS);
     } catch (e) { Logger.log(g.name + ': ' + e.message); }
   });
   bustCache_();
