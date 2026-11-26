@@ -884,7 +884,11 @@
 
   async function onSession(session) {
     S.session = session;
-    if (!session) { S.me = null; S.items = {}; applyAuthUI(); renderAll(); return; }
+    if (!session) {
+      S.me = null; S.items = {}; applyAuthUI(); renderAll();
+      if (pendingView && pendingView !== 'add') openAuth('signin');
+      return;
+    }
     const { data: me, error } = await sb.from('profiles').select('*').eq('id', session.user.id).single();
     if (error) { console.warn(error); toast('Could not load your profile: ' + error.message, true); return; }
     S.me = me;

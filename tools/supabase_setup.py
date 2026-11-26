@@ -88,7 +88,10 @@ def do_auth(env):
         'mailer_subjects_email_change': 'Confirm your new email · The Game Shelf',
         'mailer_templates_email_change_content': (mail / 'email_change.html').read_text(),
     }
-    if env.get('GMAIL_USER') and env.get('GMAIL_APP_PASSWORD'):
+    if not (env.get('GMAIL_USER') and env.get('GMAIL_APP_PASSWORD')):
+        # Supabase only allows custom templates with your own SMTP sender.
+        cfg = {k: v for k, v in cfg.items() if not k.startswith('mailer_templates_') and not k.startswith('mailer_subjects_')}
+    else:
         cfg.update({'smtp_admin_email': env['GMAIL_USER'], 'smtp_host': 'smtp.gmail.com', 'smtp_port': '465',
                     'smtp_user': env['GMAIL_USER'], 'smtp_pass': env['GMAIL_APP_PASSWORD'].replace(' ', ''),
                     'smtp_sender_name': 'The Game Shelf', 'smtp_max_frequency': 30, 'rate_limit_email_sent': 60})

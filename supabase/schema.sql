@@ -274,7 +274,12 @@ alter table public.stores enable row level security;
 alter table public.user_games enable row level security;
 alter table public.user_games_import enable row level security;   -- no policies: server only
 
-grant usage on schema public to anon, authenticated;
+grant usage on schema public to anon, authenticated, service_role;
+-- Server jobs (service_role) manage everything; RLS does not apply to them.
+grant all on all tables in schema public to service_role;
+grant all on all sequences in schema public to service_role;
+grant usage on all sequences in schema public to authenticated;
+grant execute on all functions in schema public to service_role;
 grant select on public.games, public.bgg, public.offers, public.extras, public.fakes, public.stores to anon, authenticated;
 grant insert, update, delete on public.games, public.bgg, public.extras, public.fakes, public.stores to authenticated;
 grant select, insert, update, delete on public.user_games to authenticated;
